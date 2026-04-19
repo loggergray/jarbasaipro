@@ -1,7 +1,10 @@
+
 package com.jarbas.app
 
 import android.app.*
 import android.content.Intent
+import android.content.pm.PackageManager
+import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.IBinder
@@ -10,8 +13,11 @@ import android.speech.RecognitionListener
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
 import android.speech.tts.TextToSpeech
+import android.speech.tts.UtteranceProgressListener
 import android.util.Log
+import androidx.core.app.ActivityCompat
 import androidx.core.app.NotificationCompat
+import androidx.core.content.ContextCompat
 import java.util.Locale
 
 class JarbasForegroundService : Service(), TextToSpeech.OnInitListener {
@@ -24,7 +30,9 @@ class JarbasForegroundService : Service(), TextToSpeech.OnInitListener {
     private lateinit var tts: TextToSpeech
     private var speechRecognizer: SpeechRecognizer? = null
     private var isListening = false
+    private var isTtsSpeaking = false
 
+    // ESTADOS ROBUSTOS
     var awaitingPassword = false
     var awaitingAppChoice = false
     var awaitingSearchChoice = false
@@ -34,34 +42,79 @@ class JarbasForegroundService : Service(), TextToSpeech.OnInitListener {
     var pendingApps: List<String> = emptyList()
     var pendingContactNumber: String = ""
 
+    companion object {
+        const val FOREGROUND_SERVICE_TYPE_MIC = ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
+    }
+
     override fun onCreate() {
         super.onCreate()
         createNotificationChannel()
-        tts = TextToSpeech(this, this)
+        initTts()
+    }
+
+    private fun initTts() {
+        tts = TextToSpeech(this, this).apply {
+            setOnUtteranceProgressListener(object : UtteranceProgressListener() {
+                override fun onStart(utteranceId: String?) { isTtsSpeaking = true }
+                override fun onDone(utteranceId: String?) { isTtsSpeaking = false }
+                override fun onError(utteranceId: String?) { isTtsSpeaking = false }
+            })
+        }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             "START" -> {
-                startForeground(NOTIF_ID, buildNotification("Jarbas ouvindo..."))
-                startListening()
+                if (checkMicPermission()) {
+                    startForegroundService()
+                } else {
+                    stopSelf()
+                    Log.e(TAG, "Permissão microfone negada")
+                }
             }
             "STOP" -> {
-                speakThenStop("Jarbas encerrado. Ate logo.")
+                speakThenStop("Jarbas encerrado. Até logo.")
             }
         }
         return START_STICKY
     }
 
+    private fun checkMicPermission(): Boolean {
+        return ContextCompat.checkSelfPermission(
+            this, android.Manifest.permission.RECORD_AUDIO
+        ) == PackageManager.PERMISSION_GRANTED
+    }
+
+    private fun startForegroundService() {
+        val notification = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            buildNotification("Jarbas ouvindo...", FOREGROUND_SERVICE_TYPE_MIC)
+        } else {
+            buildNotification("Jarbas ouvindo...", 0)
+        }
+        startForeground(NOTIF_ID, notification)
+        startListening()
+    }
+
     override fun onInit(status: Int) {
         if (status == TextToSpeech.SUCCESS) {
-            tts.language = Locale("pt", "BR")
+            tts.setLanguage(Locale("pt", "BR"))
             tts.setSpeechRate(0.95f)
-            handler.postDelayed({ speak("Jarbas iniciado. Pode falar.") }, 1000)
+            tts.setPitch(1.05f)
+            handler.postDelayed({ speakWelcome() }, 1000)
+        } else {
+            Log.e(TAG, "TTS init falhou: $status")
         }
     }
 
+    private fun speakWelcome() {
+        speak("Jarbas iniciado. Pode falar: Jarbas abre WhatsApp, liga pra mãe, pesquisa sobre Flutter.")
+    }
+
     private fun startListening() {
+        if (isTtsSpeaking) {
+            handler.postDelayed({ startListening() }, 500)
+            return
+        }
         isListening = true
         handler.postDelayed({ listenCycle() }, 500)
     }
@@ -73,7 +126,12 @@ class JarbasForegroundService : Service(), TextToSpeech.OnInitListener {
     }
 
     private fun listenCycle() {
-        if (!isListening) return
+        if (!isListening || isTtsSpeaking) {
+            handler.postDelayed({ listenCycle() }, 500)
+            return
+        }
+
+        // ANTI-MEMORY LEAK: destroy anterior sempre
         speechRecognizer?.destroy()
         speechRecognizer = SpeechRecognizer.createSpeechRecognizer(this)
 
@@ -81,299 +139,280 @@ class JarbasForegroundService : Service(), TextToSpeech.OnInitListener {
             putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
             putExtra(RecognizerIntent.EXTRA_LANGUAGE, "pt-BR")
             putExtra(RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE, "pt-BR")
-            putExtra(RecognizerIntent.EXTRA_ONLY_RETURN_LANGUAGE_PREFERENCE, true)
-            putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 3)
-            putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_MINIMUM_LENGTH_MILLIS, 1500L)
-            putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 1500L)
-            putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 1000L)
+            putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
+            putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 5)
+            putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_MINIMUM_LENGTH_MILLIS, 1200L)
+            putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 1200L)
+            putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 800L)
+            putExtra(RecognizerIntent.EXTRA_NOISE_SUPPRESSION, true)
         }
 
         speechRecognizer?.setRecognitionListener(object : RecognitionListener {
             override fun onResults(results: Bundle) {
                 val matches = results.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
                 val text = matches?.get(0)?.lowercase()?.trim() ?: ""
-                Log.d(TAG, "Reconheceu: '$text'")
-                if (text.isNotEmpty()) processInput(text)
-                else handler.postDelayed({ listenCycle() }, 300)
+                Log.d(TAG, "Reconheceu: '$text' (${matches?.size ?: 0} opções)")
+                if (text.isNotEmpty()) {
+                    processInput(text)
+                } else {
+                    handler.postDelayed({ listenCycle() }, 200)
+                }
             }
+
+            override fun onPartialResults(partialResults: Bundle) {
+                // Preview para responsividade
+                val partial = partialResults.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.get(0)
+                Log.v(TAG, "Parcial: $partial")
+            }
+
             override fun onError(error: Int) {
-                Log.d(TAG, "Erro reconhecimento: $error")
-                if (isListening) handler.postDelayed({ listenCycle() }, 800)
+                val errorMsg = when (error) {
+                    SpeechRecognizer.ERROR_AUDIO -> "Erro áudio"
+                    SpeechRecognizer.ERROR_CLIENT -> "Erro cliente"
+                    SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS -> "Sem permissão"
+                    SpeechRecognizer.ERROR_NETWORK -> "Sem internet"
+                    SpeechRecognizer.ERROR_NETWORK_TIMEOUT -> "Timeout rede"
+                    SpeechRecognizer.ERROR_NO_MATCH -> "Não entendeu"
+                    SpeechRecognizer.ERROR_RECOGNIZER_BUSY -> "Ocupado"
+                    SpeechRecognizer.ERROR_SERVER -> "Erro servidor"
+                    SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> "Timeout fala"
+                    else -> "Erro $error"
+                }
+                Log.d(TAG, "Erro STT: $errorMsg ($error)")
+                if (isListening) handler.postDelayed({ listenCycle() }, 1000)
             }
-            override fun onReadyForSpeech(p: Bundle) {}
+
+            override fun onReadyForSpeech(p: Bundle?) {}
             override fun onBeginningOfSpeech() {}
             override fun onRmsChanged(v: Float) {}
             override fun onBufferReceived(b: ByteArray?) {}
             override fun onEndOfSpeech() {}
-            override fun onPartialResults(p: Bundle) {}
-            override fun onEvent(t: Int, p: Bundle) {}
+            override fun onEvent(t: Int, p: Bundle?) {}
         })
 
-        speechRecognizer?.startListening(intent)
+        try {
+            speechRecognizer?.startListening(intent)
+        } catch (e: Exception) {
+            Log.e(TAG, "Falha startListening: ${e.message}")
+            handler.postDelayed({ listenCycle() }, 1500)
+        }
     }
 
     private fun processInput(text: String) {
-        Log.d(TAG, "Processando: '$text' | senha=$awaitingPassword app=$awaitingAppChoice")
-
+        Log.d(TAG, "Processando: '$text'")
         when {
-            awaitingPassword -> {
-                awaitingPassword = false
-                // extrai só os números ou dígitos falados
-                val digits = text
-                    .replace("zero", "0").replace("um", "1").replace("dois", "2")
-                    .replace("tres", "3").replace("três", "3").replace("quatro", "4")
-                    .replace("cinco", "5").replace("seis", "6").replace("sete", "7")
-                    .replace("oito", "8").replace("nove", "9")
-                    .filter { it.isDigit() }
-                if (digits.isNotEmpty()) {
-                    speak("Digitando senha.")
-                    JarbasAccessibilityService.instance?.typePassword(digits)
-                } else {
-                    speak("Nao entendi a senha. Pode repetir os numeros?")
-                    awaitingPassword = true
-                }
-                handler.postDelayed({ listenCycle() }, 2000)
-            }
-
-            awaitingAppChoice -> {
-                awaitingAppChoice = false
-                val choice = extractNumber(text)
-                if (choice in 0 until pendingApps.size) {
-                    openApp(pendingApps[choice])
-                } else {
-                    speak("Diga um ou dois.")
-                    awaitingAppChoice = true
-                }
-                handler.postDelayed({ listenCycle() }, 1500)
-            }
-
-            awaitingCallConfirm -> {
-                awaitingCallConfirm = false
-                val choice = extractNumber(text)
-                if (choice in 0 until pendingApps.size) {
-                    speak("Ligando.")
-                    JarbasAccessibilityService.instance?.callNumber(pendingApps[choice])
-                } else {
-                    speak("Diga um ou dois.")
-                    awaitingCallConfirm = true
-                }
-                handler.postDelayed({ listenCycle() }, 1500)
-            }
-
-            awaitingSearchChoice -> {
-                awaitingSearchChoice = false
-                val choice = extractNumber(text)
-                if (choice >= 0) {
-                    currentSearchIndex = choice
-                    JarbasAccessibilityService.instance?.readSearchResult(choice, this)
-                    awaitingNextResult = true
-                } else {
-                    speak("Diga o numero do resultado.")
-                    awaitingSearchChoice = true
-                }
-                handler.postDelayed({ listenCycle() }, 1000)
-            }
-
-            awaitingNextResult -> {
-                awaitingNextResult = false
-                if (text.contains("sim") || text.contains("proximo") || text.contains("mais")) {
-                    currentSearchIndex++
-                    val results = JarbasAccessibilityService.instance?.searchResults ?: emptyList()
-                    if (currentSearchIndex < results.size) {
-                        JarbasAccessibilityService.instance?.readSearchResult(currentSearchIndex, this)
-                        awaitingNextResult = true
-                    } else {
-                        speak("Nao ha mais resultados.")
-                    }
-                } else {
-                    speak("Certo.")
-                }
-                handler.postDelayed({ listenCycle() }, 1000)
-            }
-
+            awaitingPassword -> handlePassword(text)
+            awaitingAppChoice -> handleAppChoice(text)
+            awaitingCallConfirm -> handleCallConfirm(text)
+            awaitingSearchChoice -> handleSearchChoice(text)
+            awaitingNextResult -> handleNextResult(text)
             text.contains("jarbas") -> {
                 val command = text.substringAfter("jarbas").trim()
-                if (command.isEmpty()) {
-                    speak("Sim?")
-                } else {
-                    handleCommand(command)
-                }
+                if (command.isEmpty()) speak("Sim?") else handleCommand(command)
             }
-
             else -> handler.postDelayed({ listenCycle() }, 300)
         }
     }
 
+    // HANDLERS OTIMIZADOS
+    private fun handlePassword(text: String) {
+        awaitingPassword = false
+        val digits = text.replaceNumbersToDigits().filter { it.isDigit() }
+        if (digits.isNotEmpty()) {
+            speak("Digitando senha $digits")
+            JarbasAccessibilityService.instance?.typePassword(digits)
+        } else {
+            speak("Não entendi a senha. Repita os números?")
+            awaitingPassword = true
+        }
+        handler.postDelayed({ listenCycle() }, 2500)
+    }
+
+    private fun handleAppChoice(text: String) {
+        awaitingAppChoice = false
+        val choice = extractNumber(text)
+        if (choice in 0 until pendingApps.size) {
+            openApp(pendingApps[choice])
+        } else {
+            speak("Diga um, dois ou três.")
+            awaitingAppChoice = true
+        }
+        handler.postDelayed({ listenCycle() }, 1500)
+    }
+
+    private fun handleCallConfirm(text: String) {
+        awaitingCallConfirm = false
+        val choice = extractNumber(text)
+        if (choice in 0 until pendingApps.size) {
+            speak("Ligando agora.")
+            JarbasAccessibilityService.instance?.callNumber(pendingApps[choice])
+        } else {
+            speak("Diga um, dois ou três.")
+            awaitingCallConfirm = true
+        }
+        handler.postDelayed({ listenCycle() }, 1500)
+    }
+
+    private fun handleSearchChoice(text: String) {
+        awaitingSearchChoice = false
+        val choice = extractNumber(text)
+        if (choice >= 0 && choice < JarbasAccessibilityService.instance?.searchResults?.size ?: 0) {
+            currentSearchIndex = choice
+            JarbasAccessibilityService.instance?.readSearchResult(choice, this)
+            awaitingNextResult = true
+        } else {
+            speak("Diga o número do resultado: um, dois, três ou quatro.")
+            awaitingSearchChoice = true
+        }
+        handler.postDelayed({ listenCycle() }, 1000)
+    }
+
+    private fun handleNextResult(text: String) {
+        awaitingNextResult = false
+        if (text.containsAny(listOf("sim", "próximo", "mais", "continua", "seginte"))) {
+            currentSearchIndex++
+            val results = JarbasAccessibilityService.instance?.searchResults ?: emptyList()
+            if (currentSearchIndex < results.size) {
+                JarbasAccessibilityService.instance?.readSearchResult(currentSearchIndex, this)
+                awaitingNextResult = true
+            } else {
+                speak("Não há mais resultados.")
+            }
+        } else {
+            speak("Ok, voltando ao modo ouvir.")
+        }
+        handler.postDelayed({ listenCycle() }, 1000)
+    }
+
+    private fun String.replaceNumbersToDigits(): String {
+        return this
+            .replace("zero", "0").replace("zeroo", "0")
+            .replace("um", "1").replace("uma", "1")
+            .replace("dois", "2").replace("duas", "2")
+            .replace("três", "3").replace("tres", "3").replace("treeees", "3")
+            .replace("quatro", "4").replace("quatroo", "4")
+            .replace("cinco", "5")
+            .replace("seis", "6")
+            .replace("sete", "7")
+            .replace("oito", "8")
+            .replace("nove", "9")
+    }
+
+    private fun String.containsAny(words: List<String>): Boolean {
+        return words.any { this.contains(it) }
+    }
+
     private fun handleCommand(command: String) {
-        Log.d(TAG, "Comando: '$command'")
+        Log.d(TAG, "Executando comando: '$command'")
         when {
-            command.contains("acorda") || command.contains("desbloqueia") || command.contains("desbloqueie") -> {
+            command.containsAny(listOf("acorda", "desbloqueia", "desbloqueie", "tela")) -> {
                 JarbasAccessibilityService.instance?.wakeAndUnlock()
-                speak("Qual a senha?")
+                speak("Diga a senha agora.")
                 awaitingPassword = true
-                handler.postDelayed({ listenCycle() }, 2500)
             }
-
-            command.contains("encerrar") || command.contains("encerra") || command.contains("fechar jarbas") -> {
-                speakThenStop("Encerrando. Ate logo.")
+            command.containsAny(listOf("encerrar", "encerra", "para", "fechar jarbas", "desliga")) -> {
+                speakThenStop("Encerrando Jarbas. Até logo!")
             }
-
-            command.contains("obrigado") -> {
-                speak("Disponha! E so chamar.")
-                handler.postDelayed({ listenCycle() }, 2000)
+            command.containsAny(listOf("obrigado", "valeu", "obrigada")) -> {
+                speak("De nada! Estou aqui quando precisar.")
             }
-
-            command.contains("socorro") || command.contains("emergencia") || command.contains("ajuda") -> {
-                speak("Acionando emergencia!")
+            command.containsAny(listOf("socorro", "emergência", "ajuda urgente", "sos")) -> {
+                speak("🚨 Emergência acionada!")
                 JarbasAccessibilityService.instance?.triggerSOS(this)
-                handler.postDelayed({ listenCycle() }, 2000)
             }
-
-            command.contains("pesquisa") || command.contains("busca") || command.contains("pesquisar") || command.contains("buscar") -> {
-                val query = extractAfter(command, listOf(
-                    "pesquisa sobre", "pesquisa", "pesquisar sobre", "pesquisar",
-                    "busca sobre", "busca", "buscar sobre", "buscar"
-                ))
-                if (query.isNotEmpty()) {
-                    speak("Pesquisando $query")
+            command.containsAny(listOf("pesquisa", "busca", "pesquisar", "googla")) -> {
+                val query = extractAfter(command, listOf("pesquisa", "sobre", "busca"))
+                if (query.isNotBlank()) {
+                    speak("Pesquisando: $query")
                     JarbasAccessibilityService.instance?.searchWeb(query, this)
                 } else {
                     speak("O que devo pesquisar?")
-                    handler.postDelayed({ listenCycle() }, 2000)
                 }
             }
-
-            command.contains("liga") || command.contains("ligar") || command.contains("chamar") || command.contains("chama") -> {
-                val name = extractAfter(command, listOf(
-                    "liga pra", "liga para", "ligar pra", "ligar para",
-                    "chama", "chamar", "liga", "ligar"
-                ))
-                if (name.isNotEmpty()) {
-                    resolveAndCall(name)
-                } else {
-                    speak("Para quem devo ligar?")
-                    handler.postDelayed({ listenCycle() }, 2000)
-                }
+            command.containsAny(listOf("liga", "ligar", "chama", "telefone")) -> {
+                val name = extractAfter(command, listOf("liga", "pra", "para", "chama"))
+                if (name.isNotBlank()) resolveAndCall(name) else speak("Quem devo ligar?")
             }
-
-            command.contains("abre") || command.contains("abrir") || command.contains("abra") || command.contains("abrir") -> {
-                val appName = extractAfter(command, listOf(
-                    "abre o", "abre a", "abre", "abrir o", "abrir a",
-                    "abrir", "abra o", "abra a", "abra"
-                ))
-                if (appName.isNotEmpty()) {
-                    resolveAndOpenApp(appName)
-                } else {
-                    speak("Qual aplicativo?")
-                    handler.postDelayed({ listenCycle() }, 2000)
-                }
+            command.containsAny(listOf("abre", "abrir", "roda", "executa")) -> {
+                val app = extractAfter(command, listOf("abre", "abrir"))
+                if (app.isNotBlank()) resolveAndOpenApp(app) else speak("Qual app?")
             }
-
-            command.contains("toca") || command.contains("tocar") || command.contains("musica") || command.contains("música") || command.contains("play") -> {
-                val query = extractAfter(command, listOf(
-                    "toca musica de", "toca musica do", "toca a musica", "toca musica",
-                    "tocar musica", "play", "toca"
-                ))
-                val searchQuery = if (query.isEmpty()) "musicas populares brasileiras" else query
-                speak("Tocando $searchQuery")
-                JarbasAccessibilityService.instance?.openYoutubeAndPlay(searchQuery)
-                handler.postDelayed({ listenCycle() }, 2000)
+            command.containsAny(listOf("musica", "música", "toca", "tocar", "play")) -> {
+                val song = extractAfter(command, listOf("toca", "musica", "play"))
+                val query = if (song.isBlank()) "músicas populares brasil" else song
+                speak("Tocando $query no YouTube")
+                JarbasAccessibilityService.instance?.openYoutubeAndPlay(query)
             }
-
-            command.contains("sai") || command.contains("sair") || command.contains("fecha") || command.contains("fechar") || command.contains("volta") || command.contains("voltar") -> {
-                speak("Ok.")
+            command.containsAny(listOf("volta", "voltar", "sai", "fecha", "back")) -> {
+                speak("Voltando.")
                 JarbasAccessibilityService.instance?.pressBack()
-                handler.postDelayed({ listenCycle() }, 1500)
             }
-
-            command.contains("inicio") || command.contains("início") || command.contains("home") -> {
+            command.containsAny(listOf("home", "inicio", "tela inicial")) -> {
                 JarbasAccessibilityService.instance?.pressHome()
-                handler.postDelayed({ listenCycle() }, 1500)
             }
-
-            else -> {
-                speak("Nao entendi. Pode repetir?")
-                handler.postDelayed({ listenCycle() }, 2000)
-            }
+            else -> speak("Não entendi. Tente: Jarbas abre WhatsApp, liga pra pai, pesquisa IA.")
         }
     }
 
     private fun resolveAndCall(name: String) {
         val contacts = JarbasAccessibilityService.instance?.findContacts(name, contentResolver) ?: emptyList()
         when {
-            contacts.isEmpty() -> {
-                speak("Nao encontrei contato com o nome $name")
-                handler.postDelayed({ listenCycle() }, 2000)
-            }
+            contacts.isEmpty() -> speak("Contato '$name' não encontrado.")
             contacts.size == 1 -> {
                 speak("Ligando para ${contacts[0].first}")
                 JarbasAccessibilityService.instance?.callNumber(contacts[0].second)
-                handler.postDelayed({ listenCycle() }, 2000)
             }
             else -> {
-                val names = contacts.take(2).mapIndexed { i, c -> "${i + 1}: ${c.first}" }
-                pendingApps = contacts.take(2).map { it.second }
-                speak("Encontrei dois. ${names[0]} ou ${names[1]}. Diga um ou dois.")
+                val options = contacts.take(3).mapIndexed { i, c -> "${i+1}: ${c.first}" }
+                pendingApps = contacts.take(3).map { it.second }
+                speak("Encontrei ${options.size}. ${options.joinToString()}. Qual?")
                 awaitingCallConfirm = true
-                handler.postDelayed({ listenCycle() }, 1000)
             }
         }
     }
 
     private fun resolveAndOpenApp(appName: String) {
         val pm = packageManager
-        val allApps = pm.getInstalledApplications(0)
-        val matched = allApps.filter {
-            pm.getApplicationLabel(it).toString().lowercase().contains(appName.lowercase())
+        val matched = pm.getInstalledApplications(0).filter {
+            pm.getApplicationLabel(it).toString().lowercase().contains(appName)
         }
         when {
-            matched.isEmpty() -> {
-                speak("Nao encontrei $appName")
-                handler.postDelayed({ listenCycle() }, 2000)
-            }
+            matched.isEmpty() -> speak("App '$appName' não encontrado.")
             matched.size == 1 -> {
-                val label = pm.getApplicationLabel(matched[0]).toString()
+                val label = pm.getApplicationLabel(matched[0])
                 speak("Abrindo $label")
                 openApp(matched[0].packageName)
-                handler.postDelayed({ listenCycle() }, 2000)
             }
             else -> {
-                val top = matched.take(2)
-                val names = top.mapIndexed { i, app -> "${i + 1}: ${pm.getApplicationLabel(app)}" }
+                val top = matched.take(3)
+                val options = top.mapIndexed { i, app -> "${i+1}: ${pm.getApplicationLabel(app)}" }
                 pendingApps = top.map { it.packageName }
-                speak("Encontrei dois. ${names[0]} ou ${names[1]}. Diga um ou dois.")
+                speak("Encontrei ${options.size}. ${options.joinToString()}. Qual?")
                 awaitingAppChoice = true
-                handler.postDelayed({ listenCycle() }, 1000)
             }
         }
     }
 
     private fun openApp(packageName: String) {
-        val intent = packageManager.getLaunchIntentForPackage(packageName)
-        if (intent != null) {
+        packageManager.getLaunchIntentForPackage(packageName)?.let { intent ->
             intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             startActivity(intent)
-        } else {
-            speak("Nao consegui abrir o aplicativo.")
-        }
+        } ?: speak("Falha ao abrir app.")
     }
 
     private fun extractAfter(text: String, keywords: List<String>): String {
-        val sorted = keywords.sortedByDescending { it.length }
-        for (keyword in sorted) {
-            if (text.contains(keyword)) {
-                return text.substringAfter(keyword).trim()
-            }
+        keywords.sortedByDescending { it.length }.forEach { kw ->
+            if (text.contains(kw)) return text.substringAfterLast(kw).trim()
         }
         return ""
     }
 
     private fun extractNumber(text: String): Int {
         return when {
-            text.contains("um") || text.contains("1") || text.contains("primeiro") -> 0
-            text.contains("dois") || text.contains("2") || text.contains("segundo") -> 1
-            text.contains("tres") || text.contains("três") || text.contains("3") || text.contains("terceiro") -> 2
-            text.contains("quatro") || text.contains("4") || text.contains("quarto") -> 3
+            text.containsAny(listOf("um", "1", "primeiro")) -> 0
+            text.containsAny(listOf("dois", "2", "segundo")) -> 1
+            text.containsAny(listOf("três", "tres", "3", "terceiro")) -> 2
+            text.containsAny(listOf("quatro", "4", "quarto")) -> 3
             else -> -1
         }
     }
@@ -382,39 +421,53 @@ class JarbasForegroundService : Service(), TextToSpeech.OnInitListener {
         speak(text)
         handler.postDelayed({
             stopListening()
-            stopForeground(true)
+            stopForeground(STOP_FOREGROUND_REMOVE)
             stopSelf()
-        }, 2500)
+        }, 3000)
     }
 
     fun speak(text: String) {
-        tts.speak(text, TextToSpeech.QUEUE_FLUSH, null, null)
+        if (isTtsSpeaking) {
+            handler.postDelayed({ speak(text) }, 500)
+            return
+        }
+        tts.speak(text, TextToSpeech.QUEUE_FLUSH, null, "jarbas_$System.currentTimeMillis()")
     }
 
     private fun createNotificationChannel() {
-        val channel = NotificationChannel(CHANNEL_ID, "Jarbas", NotificationManager.IMPORTANCE_LOW)
-        val manager = getSystemService(NotificationManager::class.java)
-        manager.createNotificationChannel(channel)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val channel = NotificationChannel(
+                CHANNEL_ID, "Jarbas Assistente", NotificationManager.IMPORTANCE_LOW
+            ).apply {
+                description = "Assistente de voz sempre ativo"
+                setSound(null, null)
+            }
+            getSystemService(NotificationManager::class.java)?.createNotificationChannel(channel)
+        }
     }
 
-    private fun buildNotification(text: String): Notification {
+    private fun buildNotification(text: String, serviceType: Int): Notification {
         val pi = PendingIntent.getActivity(
-            this, 0, Intent(this, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE
+            this, 0, Intent(this, MainActivity::class.java),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
         return NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("Jarbas")
+            .setContentTitle("🎤 Jarbas Ativo")
             .setContentText(text)
             .setSmallIcon(android.R.drawable.ic_btn_speak_now)
             .setContentIntent(pi)
             .setOngoing(true)
+            .setCategory(NotificationCompat.CATEGORY_SERVICE)
+            .setPriority(NotificationCompat.PRIORITY_LOW)
             .build()
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onDestroy() {
-        tts.shutdown()
-        speechRecognizer?.destroy()
+        stopListening()
+        if (::tts.isInitialized) tts.shutdown()
+        Log.d(TAG, "JarbasForegroundService destruído")
         super.onDestroy()
     }
 }
