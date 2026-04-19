@@ -24,6 +24,9 @@ class JarbasForegroundService : Service(), TextToSpeech.OnInitListener {
     private var isListening = false
     private var awaitingPassword = false
     private var awaitingAppChoice = false
+    var awaitingSearchChoice = false
+    var awaitingNextResult = false
+    private var currentSearchIndex = 0
     private var pendingApps: List<String> = emptyList()
 
     override fun onCreate() {
@@ -122,6 +125,42 @@ class JarbasForegroundService : Service(), TextToSpeech.OnInitListener {
                 }
                 listenForWakeWord()
             }
+            awaitingSearchChoice -> {
+                awaitingSearchChoice = false
+                val choice = when {
+                    text.contains("1") || text.contains("um") || text.contains("primeiro") -> 0
+                    text.contains("2") || text.contains("dois") || text.contains("segundo") -> 1
+                    text.contains("3") || text.contains("tres") || text.contains("terceiro") -> 2
+                    text.contains("4") || text.contains("quatro") || text.contains("quarto") -> 3
+                    else -> -1
+                }
+                if (choice >= 0) {
+                    currentSearchIndex = choice
+                    JarbasAccessibilityService.instance?.readSearchResult(choice, this)
+                    awaitingNextResult = true
+                } else {
+                    speak("Nao entendi. Diga um, dois, tres ou quatro.")
+                    awaitingSearchChoice = true
+                }
+                listenForWakeWord()
+            }
+            awaitingNextResult -> {
+                awaitingNextResult = false
+                when {
+                    text.contains("sim") || text.contains("proximo") || text.contains("next") -> {
+                        currentSearchIndex++
+                        val results = JarbasAccessibilityService.instance?.searchResults ?: emptyList()
+                        if (currentSearchIndex < results.size) {
+                            JarbasAccessibilityService.instance?.readSearchResult(currentSearchIndex, this)
+                            awaitingNextResult = true
+                        } else {
+                            speak("Nao ha mais resultados.")
+                        }
+                    }
+                    else -> speak("Certo. E so chamar.")
+                }
+                listenForWakeWord()
+            }
             text.contains("jarbas") -> {
                 val command = text.substringAfter("jarbas").trim()
                 handleCommand(command)
@@ -147,6 +186,21 @@ class JarbasForegroundService : Service(), TextToSpeech.OnInitListener {
                 speak("Disponha! E so chamar.")
                 listenForWakeWord()
             }
+            command.contains("socorro") || command.contains("emergencia") -> {
+                speak("Acionando emergencia!")
+                JarbasAccessibilityService.instance?.triggerSOS(this)
+                listenForWakeWord()
+            }
+            command.contains("pesquisa") || command.contains("busca") || command.contains("pesquisar") -> {
+                val query = extractAfter(command, listOf("pesquisa sobre", "pesquisa", "pesquisar sobre", "pesquisar", "busca sobre", "busca"))
+                if (query.isNotEmpty()) {
+                    speak("Pesquisando sobre $query")
+                    JarbasAccessibilityService.instance?.searchWeb(query, this)
+                } else {
+                    speak("O que devo pesquisar?")
+                    listenForWakeWord()
+                }
+            }
             command.contains("liga") || command.contains("ligar") -> {
                 val name = extractAfter(command, listOf("liga pra", "ligar pra", "liga para", "ligar para"))
                 if (name.isNotEmpty()) {
@@ -168,32 +222,17 @@ class JarbasForegroundService : Service(), TextToSpeech.OnInitListener {
             }
             command.contains("toca") || command.contains("tocar") || command.contains("musica") -> {
                 val query = extractAfter(command, listOf("toca musica de", "toca musica do", "toca musica", "tocar musica", "toca"))
-                val searchQuery = if (query.isEmpty()) "musicas populares" else query
-                speak("Abrindo YouTube e tocando $searchQuery")
+                val searchQuery = if (query.isEmpty()) "musicas populares brasileiras" else query
+                speak("Tocando $searchQuery no YouTube")
                 JarbasAccessibilityService.instance?.openYoutubeAndPlay(searchQuery)
                 listenForWakeWord()
             }
-            command.contains("pesquisa") || command.contains("pesquisar") || command.contains("busca") -> {
-                val query = extractAfter(command, listOf("pesquisa sobre", "pesquisa", "pesquisar sobre", "pesquisar", "busca sobre", "busca"))
-                if (query.isNotEmpty()) {
-                    speak("Pesquisando sobre $query")
-                    JarbasAccessibilityService.instance?.searchWeb(query, this)
-                } else {
-                    speak("O que devo pesquisar?")
-                }
-                listenForWakeWord()
-            }
-            command.contains("socorro") || command.contains("ajuda") || command.contains("emergencia") -> {
-                speak("Acionando emergencia!")
-                JarbasAccessibilityService.instance?.triggerSOS(this)
-                listenForWakeWord()
-            }
-            command.contains("sai") || command.contains("sair") || command.contains("fechar") || command.contains("fecha") -> {
+            command.contains("sai") || command.contains("sair") || command.contains("fecha") || command.contains("fechar") -> {
                 speak("Fechando.")
                 JarbasAccessibilityService.instance?.pressBack()
                 listenForWakeWord()
             }
-            command.contains("voltar") || command.contains("volta") -> {
+            command.contains("volta") || command.contains("voltar") -> {
                 JarbasAccessibilityService.instance?.pressBack()
                 listenForWakeWord()
             }
@@ -202,7 +241,7 @@ class JarbasForegroundService : Service(), TextToSpeech.OnInitListener {
                 listenForWakeWord()
             }
             else -> {
-                speak("Nao entendi o comando. Pode repetir?")
+                speak("Nao entendi. Pode repetir?")
                 listenForWakeWord()
             }
         }
@@ -216,7 +255,6 @@ class JarbasForegroundService : Service(), TextToSpeech.OnInitListener {
         val matched = apps.filter {
             pm.getApplicationLabel(it).toString().lowercase().contains(appName.lowercase())
         }
-
         when {
             matched.isEmpty() -> {
                 speak("Nao encontrei o aplicativo $appName")
@@ -228,9 +266,7 @@ class JarbasForegroundService : Service(), TextToSpeech.OnInitListener {
                 listenForWakeWord()
             }
             else -> {
-                val names = matched.take(2).mapIndexed { i, app ->
-                    "${i + 1}: ${pm.getApplicationLabel(app)}"
-                }
+                val names = matched.take(2).mapIndexed { i, app -> "${i + 1}: ${pm.getApplicationLabel(app)}" }
                 pendingApps = matched.take(2).map { it.packageName }
                 speak("Encontrei dois. ${names[0]} ou ${names[1]}. Diga um ou dois.")
                 awaitingAppChoice = true
@@ -247,9 +283,7 @@ class JarbasForegroundService : Service(), TextToSpeech.OnInitListener {
 
     private fun extractAfter(text: String, keywords: List<String>): String {
         for (keyword in keywords) {
-            if (text.contains(keyword)) {
-                return text.substringAfter(keyword).trim()
-            }
+            if (text.contains(keyword)) return text.substringAfter(keyword).trim()
         }
         return ""
     }

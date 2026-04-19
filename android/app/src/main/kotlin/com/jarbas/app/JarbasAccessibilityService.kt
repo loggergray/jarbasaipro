@@ -20,6 +20,8 @@ class JarbasAccessibilityService : AccessibilityService() {
     private val TAG = "JarbasAccessibility"
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
+    var searchResults: List<Pair<String, String>> = emptyList()
+
     companion object {
         var instance: JarbasAccessibilityService? = null
         const val SOS_CONTACT = ""
@@ -43,17 +45,12 @@ class JarbasAccessibilityService : AccessibilityService() {
         val skipButtons = findNodesByText(root, listOf("Pular anuncio", "Skip Ad", "PULAR", "SKIP", "Pular"))
         if (skipButtons.isNotEmpty()) {
             skipButtons[0].performAction(AccessibilityNodeInfo.ACTION_CLICK)
-            Log.d(TAG, "Anuncio pulado automaticamente")
+            Log.d(TAG, "Anuncio pulado")
         }
     }
 
-    fun pressBack() {
-        performGlobalAction(GLOBAL_ACTION_BACK)
-    }
-
-    fun pressHome() {
-        performGlobalAction(GLOBAL_ACTION_HOME)
-    }
+    fun pressBack() { performGlobalAction(GLOBAL_ACTION_BACK) }
+    fun pressHome() { performGlobalAction(GLOBAL_ACTION_HOME) }
 
     fun typePassword(password: String) {
         val root = rootInActiveWindow ?: return
@@ -65,7 +62,7 @@ class JarbasAccessibilityService : AccessibilityService() {
         )
         for (id in possibleIds) {
             val fields = root.findAccessibilityNodeInfosByViewId(id)
-            if (fields != null && fields.isNotEmpty()) {
+            if (!fields.isNullOrEmpty()) {
                 val bundle = Bundle()
                 bundle.putString(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, password)
                 fields[0].performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, bundle)
@@ -73,8 +70,8 @@ class JarbasAccessibilityService : AccessibilityService() {
             }
         }
         for (digit in password) {
-            val digitNodes = findNodesByText(root, listOf(digit.toString()))
-            digitNodes.firstOrNull()?.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+            findNodesByText(root, listOf(digit.toString())).firstOrNull()
+                ?.performAction(AccessibilityNodeInfo.ACTION_CLICK)
             Thread.sleep(150)
         }
     }
@@ -97,21 +94,16 @@ class JarbasAccessibilityService : AccessibilityService() {
             Uri.parse("https://www.youtube.com/results?search_query=$encodedQuery"))
         intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         startActivity(intent)
-
         scope.launch {
             delay(4000)
-            withContext(Dispatchers.Main) {
-                clickFirstVideoResult()
-            }
+            withContext(Dispatchers.Main) { clickFirstVideoResult() }
         }
     }
 
     private fun clickFirstVideoResult() {
         val root = rootInActiveWindow ?: return
-        val videoNodes = root.findAccessibilityNodeInfosByViewId(
-            "com.google.android.youtube:id/title"
-        )
-        if (videoNodes != null && videoNodes.isNotEmpty()) {
+        val videoNodes = root.findAccessibilityNodeInfosByViewId("com.google.android.youtube:id/title")
+        if (!videoNodes.isNullOrEmpty()) {
             videoNodes[0].performAction(AccessibilityNodeInfo.ACTION_CLICK)
         }
     }
@@ -123,7 +115,6 @@ class JarbasAccessibilityService : AccessibilityService() {
                 val url = "https://api.duckduckgo.com/?q=$encoded&format=json&no_html=1&skip_disambig=1"
                 val response = URL(url).readText()
                 val json = JSONObject(response)
-
                 val results = mutableListOf<Pair<String, String>>()
 
                 val abstractText = json.optString("AbstractText", "")
@@ -146,27 +137,29 @@ class JarbasAccessibilityService : AccessibilityService() {
                 withContext(Dispatchers.Main) {
                     if (results.isEmpty()) {
                         service.speak("Nao encontrei resultados para $query")
+                        service.awaitingSearchChoice = false
                     } else {
-                        val titles = results.take(4).mapIndexed { i, r -> "${i + 1}: ${r.first}" }.joinToString(". ")
-                        service.speak("Achei ${results.size} resultados. $titles. Qual voce quer ouvir?")
                         searchResults = results.take(4)
+                        val titles = searchResults.mapIndexed { i, r -> "${i + 1}: ${r.first}" }.joinToString(". ")
+                        service.speak("Achei ${searchResults.size} resultados sobre $query. $titles. Qual voce quer ouvir?")
                         service.awaitingSearchChoice = true
                     }
                 }
             } catch (e: Exception) {
                 withContext(Dispatchers.Main) {
                     service.speak("Erro ao pesquisar. Verifique a internet.")
+                    service.awaitingSearchChoice = false
                 }
             }
         }
     }
 
-    var searchResults: List<Pair<String, String>> = emptyList()
-
     fun readSearchResult(index: Int, service: JarbasForegroundService) {
         if (index < searchResults.size) {
             val result = searchResults[index]
             service.speak("${result.first}. ${result.second}. Deseja ouvir o proximo?")
+        } else {
+            service.speak("Nao ha mais resultados.")
         }
     }
 
@@ -180,14 +173,6 @@ class JarbasAccessibilityService : AccessibilityService() {
         } catch (e: Exception) {
             Log.e(TAG, "Erro SOS: ${e.message}")
         }
-    }
-
-    fun clickOnScreen(x: Float, y: Float) {
-        val path = Path().apply { moveTo(x, y) }
-        val gesture = GestureDescription.Builder()
-            .addStroke(GestureDescription.StrokeDescription(path, 0, 100))
-            .build()
-        dispatchGesture(gesture, null, null)
     }
 
     fun findAndClick(text: String): Boolean {
@@ -216,9 +201,7 @@ class JarbasAccessibilityService : AccessibilityService() {
         return result
     }
 
-    override fun onInterrupt() {
-        Log.d(TAG, "AccessibilityService interrompido")
-    }
+    override fun onInterrupt() {}
 
     override fun onDestroy() {
         instance = null
