@@ -15,7 +15,7 @@ workflows:
       events:
         - push
       branch_patterns:
-        - pattern: main
+        - pattern: apkjarbas3
           include: true
 
     scripts:
