@@ -9,7 +9,7 @@ class HomeScreen extends StatefulWidget {
   State<HomeScreen> createState() => _HomeScreenState();
 }
 
-class _HomeScreenState extends State<HomeScreen> {
+class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   static const _channel = MethodChannel('com.jarbas.app/control');
 
   bool _jarbasAtivo = false;
@@ -19,27 +19,57 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _checkPermissions();
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  // Toda vez que voltar pro app verifica novamente
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      _checkPermissions();
+    }
   }
 
   Future<void> _checkPermissions() async {
     final accessOk = await _channel.invokeMethod<bool>('isAccessibilityEnabled') ?? false;
-    setState(() => _accessibilityOk = accessOk);
+    setState(() {
+      _accessibilityOk = accessOk;
+    });
   }
 
-  Future<void> _requestAllPermissions() async {
-    await [
-      Permission.microphone,
-      Permission.phone,
-      Permission.contacts,
-    ].request();
+  Future<void> _iniciarJarbas() async {
+    final micOk = await Permission.microphone.request();
+    await Permission.phone.request();
+    await Permission.contacts.request();
 
     final accessOk = await _channel.invokeMethod<bool>('isAccessibilityEnabled') ?? false;
+
     if (!accessOk) {
       _showAccessibilityDialog();
-    } else {
-      setState(() => _accessibilityOk = true);
+      return;
     }
+
+    await _channel.invokeMethod('startJarbas');
+    setState(() {
+      _jarbasAtivo = true;
+      _accessibilityOk = true;
+      _status = 'Jarbas ouvindo... Diga "Jarbas" para comecar';
+    });
+  }
+
+  Future<void> _encerrarJarbas() async {
+    await _channel.invokeMethod('stopJarbas');
+    setState(() {
+      _jarbasAtivo = false;
+      _status = 'Jarbas inativo';
+    });
   }
 
   void _showAccessibilityDialog() {
@@ -51,8 +81,8 @@ class _HomeScreenState extends State<HomeScreen> {
         title: const Text('Permissao necessaria',
             style: TextStyle(color: Colors.white)),
         content: const Text(
-          'Para o Jarbas controlar o celular por voz, ative o servico de Acessibilidade do Jarbas nas configuracoes.',
-          style: TextStyle(color: Colors.white70),
+          'Ative o servico Jarbas em:\nConfiguracoes > Acessibilidade > Jarbas\n\nDepois volte aqui e aperte INICIAR.',
+          style: TextStyle(color: Colors.white70, height: 1.6),
         ),
         actions: [
           TextButton(
@@ -63,29 +93,14 @@ class _HomeScreenState extends State<HomeScreen> {
             child: const Text('Abrir Configuracoes',
                 style: TextStyle(color: Color(0xFF00D4FF))),
           ),
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Ja ativei',
+                style: TextStyle(color: Colors.white54)),
+          ),
         ],
       ),
     );
-  }
-
-  Future<void> _iniciarJarbas() async {
-    if (!_accessibilityOk) {
-      await _requestAllPermissions();
-      return;
-    }
-    await _channel.invokeMethod('startJarbas');
-    setState(() {
-      _jarbasAtivo = true;
-      _status = 'Jarbas ouvindo... Diga "Jarbas" para comecar';
-    });
-  }
-
-  Future<void> _encerrarJarbas() async {
-    await _channel.invokeMethod('stopJarbas');
-    setState(() {
-      _jarbasAtivo = false;
-      _status = 'Jarbas inativo';
-    });
   }
 
   @override
@@ -132,17 +147,15 @@ class _HomeScreenState extends State<HomeScreen> {
                     width: 2,
                   ),
                   boxShadow: _jarbasAtivo
-                      ? [
-                          BoxShadow(
-                            color: const Color(0xFF00D4FF).withOpacity(0.3),
-                            blurRadius: 30,
-                            spreadRadius: 5,
-                          )
-                        ]
+                      ? [BoxShadow(
+                          color: const Color(0xFF00D4FF).withOpacity(0.3),
+                          blurRadius: 30,
+                          spreadRadius: 5,
+                        )]
                       : [],
                 ),
                 child: Icon(
-                  Icons.mic,
+                  _jarbasAtivo ? Icons.mic : Icons.mic_off,
                   size: 80,
                   color: _jarbasAtivo
                       ? const Color(0xFF00D4FF)
@@ -170,16 +183,12 @@ class _HomeScreenState extends State<HomeScreen> {
                   style: ElevatedButton.styleFrom(
                     backgroundColor: const Color(0xFF00D4FF),
                     foregroundColor: const Color(0xFF0D0D1A),
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 60, vertical: 18),
+                    padding: const EdgeInsets.symmetric(horizontal: 60, vertical: 18),
                     shape: RoundedRectangleBorder(
                         borderRadius: BorderRadius.circular(50)),
                   ),
-                  child: const Text(
-                    'INICIAR JARBAS',
-                    style: TextStyle(
-                        fontSize: 18, fontWeight: FontWeight.bold),
-                  ),
+                  child: const Text('INICIAR JARBAS',
+                      style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
                 )
               else
                 ElevatedButton(
@@ -187,26 +196,21 @@ class _HomeScreenState extends State<HomeScreen> {
                   style: ElevatedButton.styleFrom(
                     backgroundColor: Colors.red.shade700,
                     foregroundColor: Colors.white,
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 60, vertical: 18),
+                    padding: const EdgeInsets.symmetric(horizontal: 60, vertical: 18),
                     shape: RoundedRectangleBorder(
                         borderRadius: BorderRadius.circular(50)),
                   ),
-                  child: const Text(
-                    'ENCERRAR JARBAS',
-                    style: TextStyle(
-                        fontSize: 18, fontWeight: FontWeight.bold),
-                  ),
+                  child: const Text('ENCERRAR JARBAS',
+                      style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
                 ),
               const SizedBox(height: 20),
               if (!_accessibilityOk)
                 TextButton(
-                  onPressed: () =>
-                      _channel.invokeMethod('openAccessibilitySettings'),
-                  child: const Text(
-                    'Ativar Acessibilidade',
-                    style: TextStyle(color: Colors.orange),
-                  ),
+                  onPressed: () async {
+                    await _channel.invokeMethod('openAccessibilitySettings');
+                  },
+                  child: const Text('Ativar Acessibilidade',
+                      style: TextStyle(color: Colors.orange)),
                 ),
             ],
           ),

@@ -1,8 +1,8 @@
 package com.jarbas.app
 
 import android.content.Intent
-import android.os.Bundle
 import android.provider.Settings
+import android.text.TextUtils
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
@@ -45,11 +45,20 @@ class MainActivity : FlutterActivity() {
     }
 
     private fun isAccessibilityServiceEnabled(): Boolean {
-        val service = packageName + "/" + JarbasAccessibilityService::class.java.canonicalName
+        val expectedService = "$packageName/${JarbasAccessibilityService::class.java.canonicalName}"
         val enabledServices = Settings.Secure.getString(
             contentResolver,
             Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES
         ) ?: return false
-        return enabledServices.contains(service)
+
+        val colonSplitter = TextUtils.SimpleStringSplitter(':')
+        colonSplitter.setString(enabledServices)
+        while (colonSplitter.hasNext()) {
+            val component = colonSplitter.next()
+            if (component.equals(expectedService, ignoreCase = true)) {
+                return true
+            }
+        }
+        return false
     }
 }
