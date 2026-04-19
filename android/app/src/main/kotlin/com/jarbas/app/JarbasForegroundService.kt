@@ -2,6 +2,8 @@ package com.jarbas.app
 
 import android.app.*
 import android.content.Intent
+import android.content.pm.ApplicationInfo
+import android.os.Bundle
 import android.os.IBinder
 import android.speech.RecognitionListener
 import android.speech.RecognizerIntent
@@ -20,7 +22,6 @@ class JarbasForegroundService : Service(), TextToSpeech.OnInitListener {
     private lateinit var tts: TextToSpeech
     private var speechRecognizer: SpeechRecognizer? = null
     private var isListening = false
-    private var awaitingCommand = false
     private var awaitingPassword = false
     private var awaitingAppChoice = false
     private var pendingApps: List<String> = emptyList()
@@ -76,8 +77,8 @@ class JarbasForegroundService : Service(), TextToSpeech.OnInitListener {
         }
 
         speechRecognizer?.setRecognitionListener(object : RecognitionListener {
-            override fun onResults(results: Bundle?) {
-                val matches = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
+            override fun onResults(results: Bundle) {
+                val matches = results.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
                 val text = matches?.get(0)?.lowercase() ?: ""
                 Log.d(TAG, "Ouviu: $text")
                 processInput(text)
@@ -85,13 +86,13 @@ class JarbasForegroundService : Service(), TextToSpeech.OnInitListener {
             override fun onError(error: Int) {
                 if (isListening) listenForWakeWord()
             }
-            override fun onReadyForSpeech(params: Bundle?) {}
+            override fun onReadyForSpeech(params: Bundle) {}
             override fun onBeginningOfSpeech() {}
             override fun onRmsChanged(rmsdB: Float) {}
             override fun onBufferReceived(buffer: ByteArray?) {}
             override fun onEndOfSpeech() {}
-            override fun onPartialResults(partialResults: Bundle?) {}
-            override fun onEvent(eventType: Int, params: Bundle?) {}
+            override fun onPartialResults(partialResults: Bundle) {}
+            override fun onEvent(eventType: Int, params: Bundle) {}
         })
 
         speechRecognizer?.startListening(intent)
@@ -172,6 +173,21 @@ class JarbasForegroundService : Service(), TextToSpeech.OnInitListener {
                 JarbasAccessibilityService.instance?.openYoutubeAndPlay(searchQuery)
                 listenForWakeWord()
             }
+            command.contains("pesquisa") || command.contains("pesquisar") || command.contains("busca") -> {
+                val query = extractAfter(command, listOf("pesquisa sobre", "pesquisa", "pesquisar sobre", "pesquisar", "busca sobre", "busca"))
+                if (query.isNotEmpty()) {
+                    speak("Pesquisando sobre $query")
+                    JarbasAccessibilityService.instance?.searchWeb(query, this)
+                } else {
+                    speak("O que devo pesquisar?")
+                }
+                listenForWakeWord()
+            }
+            command.contains("socorro") || command.contains("ajuda") || command.contains("emergencia") -> {
+                speak("Acionando emergencia!")
+                JarbasAccessibilityService.instance?.triggerSOS(this)
+                listenForWakeWord()
+            }
             command.contains("sai") || command.contains("sair") || command.contains("fechar") || command.contains("fecha") -> {
                 speak("Fechando.")
                 JarbasAccessibilityService.instance?.pressBack()
@@ -194,7 +210,9 @@ class JarbasForegroundService : Service(), TextToSpeech.OnInitListener {
 
     private fun resolveAndOpenApp(appName: String) {
         val pm = packageManager
-        val apps = pm.getInstalledApplications(0)
+        val apps = pm.getInstalledApplications(0).filter {
+            (it.flags and ApplicationInfo.FLAG_SYSTEM) == 0
+        }
         val matched = apps.filter {
             pm.getApplicationLabel(it).toString().lowercase().contains(appName.lowercase())
         }
@@ -224,7 +242,7 @@ class JarbasForegroundService : Service(), TextToSpeech.OnInitListener {
     private fun openApp(packageName: String) {
         val intent = packageManager.getLaunchIntentForPackage(packageName)
         intent?.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        startActivity(intent)
+        if (intent != null) startActivity(intent)
     }
 
     private fun extractAfter(text: String, keywords: List<String>): String {
