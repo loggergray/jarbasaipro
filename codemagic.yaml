@@ -1,0 +1,49 @@
+workflows:
+  jarbas-profile:
+    name: Jarbas Profile APK
+    max_build_duration: 60
+
+    environment:
+      flutter: stable
+      java: 17
+      vars:
+        LANG: "en_US.UTF-8"
+        LC_ALL: "en_US.UTF-8"
+        JVM_ARGS: "-Xmx12g"
+
+    triggering:
+      events:
+        - push
+      branch_patterns:
+        - pattern: main
+          include: true
+
+    scripts:
+      - name: Configurar Flutter
+        script: |
+          flutter config --enable-android
+          flutter doctor
+
+      - name: Limpar cache
+        script: |
+          flutter clean
+
+      - name: Dependencias Flutter
+        script: |
+          flutter pub get
+
+      - name: Build APK Profile
+        script: |
+          cd $CM_BUILD_DIR
+          flutter build apk --profile
+
+    artifacts:
+      - build/app/outputs/flutter-apk/app-profile.apk
+
+    publishing:
+      email:
+        recipients:
+          - loggergray@gmail.com
+        notify:
+          success: true
+          failure: true
