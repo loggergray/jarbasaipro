@@ -14,6 +14,7 @@ import android.speech.SpeechRecognizer
 import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
 import android.util.Log
+import androidx.core.app.ActivityCompat
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 import java.util.Locale
@@ -37,6 +38,7 @@ class JarbasForegroundService : Service(), TextToSpeech.OnInitListener {
     var awaitingCallConfirm = false
     var currentSearchIndex = 0
     var pendingApps: List<String> = emptyList()
+    var pendingContactNumber: String = ""
 
     override fun onCreate() {
         super.onCreate()
@@ -58,13 +60,7 @@ class JarbasForegroundService : Service(), TextToSpeech.OnInitListener {
         when (intent?.action) {
             "START" -> {
                 if (checkMicPermission()) {
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                        startForeground(NOTIF_ID, buildNotification("Jarbas ouvindo..."),
-                            android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE)
-                    } else {
-                        startForeground(NOTIF_ID, buildNotification("Jarbas ouvindo..."))
-                    }
-                    startListening()
+                    startJarbasForeground()
                 } else {
                     stopSelf()
                     Log.e(TAG, "Permissao microfone negada")
@@ -81,17 +77,32 @@ class JarbasForegroundService : Service(), TextToSpeech.OnInitListener {
         ) == PackageManager.PERMISSION_GRANTED
     }
 
+    private fun startJarbasForeground() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            startForeground(
+                NOTIF_ID,
+                buildNotification("Jarbas ouvindo...", 0),
+                android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
+            )
+        } else {
+            startForeground(NOTIF_ID, buildNotification("Jarbas ouvindo...", 0))
+        }
+        startListening()
+    }
+
     override fun onInit(status: Int) {
         if (status == TextToSpeech.SUCCESS) {
             tts.setLanguage(Locale("pt", "BR"))
             tts.setSpeechRate(0.95f)
             tts.setPitch(1.05f)
-            handler.postDelayed({
-                speak("Jarbas iniciado. Pode falar: Jarbas abre WhatsApp, liga pra mae, pesquisa sobre Flutter.")
-            }, 1000)
+            handler.postDelayed({ speakWelcome() }, 1000)
         } else {
             Log.e(TAG, "TTS init falhou: $status")
         }
+    }
+
+    private fun speakWelcome() {
+        speak("Jarbas iniciado. Pode falar: Jarbas abre WhatsApp, liga pra mae, pesquisa sobre Flutter.")
     }
 
     private fun startListening() {
@@ -141,7 +152,19 @@ class JarbasForegroundService : Service(), TextToSpeech.OnInitListener {
                 Log.v(TAG, "Parcial: $partial")
             }
             override fun onError(error: Int) {
-                Log.d(TAG, "Erro STT: $error")
+                val errorMsg = when (error) {
+                    SpeechRecognizer.ERROR_AUDIO -> "Erro audio"
+                    SpeechRecognizer.ERROR_CLIENT -> "Erro cliente"
+                    SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS -> "Sem permissao"
+                    SpeechRecognizer.ERROR_NETWORK -> "Sem internet"
+                    SpeechRecognizer.ERROR_NETWORK_TIMEOUT -> "Timeout rede"
+                    SpeechRecognizer.ERROR_NO_MATCH -> "Nao entendeu"
+                    SpeechRecognizer.ERROR_RECOGNIZER_BUSY -> "Ocupado"
+                    SpeechRecognizer.ERROR_SERVER -> "Erro servidor"
+                    SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> "Timeout fala"
+                    else -> "Erro $error"
+                }
+                Log.d(TAG, "Erro STT: $errorMsg ($error)")
                 if (isListening) handler.postDelayed({ listenCycle() }, 1000)
             }
             override fun onReadyForSpeech(p: Bundle?) {}
@@ -429,7 +452,7 @@ class JarbasForegroundService : Service(), TextToSpeech.OnInitListener {
         }
     }
 
-    private fun buildNotification(text: String): Notification {
+    private fun buildNotification(text: String, serviceType: Int): Notification {
         val pi = PendingIntent.getActivity(
             this, 0, Intent(this, MainActivity::class.java),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
@@ -454,3 +477,4 @@ class JarbasForegroundService : Service(), TextToSpeech.OnInitListener {
         super.onDestroy()
     }
 }
+
