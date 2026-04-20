@@ -39,6 +39,15 @@ class MainActivity : FlutterActivity() {
                     startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
                     result.success(true)
                 }
+                "isBatteryOptimizationDisabled" -> {
+                    val pm = getSystemService(POWER_SERVICE) as android.os.PowerManager
+                    result.success(pm.isIgnoringBatteryOptimizations(packageName))
+                }
+                "setSOSContact" -> {
+                    val contact = call.argument<String>("contact") ?: ""
+                    JarbasAccessibilityService.sosContact = contact
+                    result.success(true)
+                }
                 else -> result.notImplemented()
             }
         }

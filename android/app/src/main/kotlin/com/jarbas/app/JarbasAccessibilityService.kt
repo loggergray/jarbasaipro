@@ -42,6 +42,27 @@ class JarbasAccessibilityService : AccessibilityService() {
         if (pkg.contains("youtube")) {
             handler.postDelayed({ checkAndSkipAd() }, 500)
         }
+        // Check if foreground service is running, if not, restart
+        if (!isForegroundRunning()) {
+            restartForegroundService()
+        }
+    }
+
+    private fun isForegroundRunning(): Boolean {
+        // Simple check, assume if instance exists
+        return JarbasForegroundService::class.java.simpleName in getRunningServices()
+    }
+
+    private fun getRunningServices(): List<String> {
+        val manager = getSystemService(ACTIVITY_SERVICE) as android.app.ActivityManager
+        return manager.getRunningServices(100).map { it.service.className }
+    }
+
+    private fun restartForegroundService() {
+        val intent = Intent(this, JarbasForegroundService::class.java)
+        intent.action = "START"
+        startForegroundService(intent)
+        Log.d(TAG, "Reiniciando foreground service")
     }
 
     private fun checkAndSkipAd() {
@@ -64,11 +85,15 @@ class JarbasAccessibilityService : AccessibilityService() {
     fun pressHome() { performGlobalAction(GLOBAL_ACTION_HOME) }
 
     fun wakeAndUnlock() {
-        // GLOBAL_ACTION_WAKEUP nao existe no API 26, usando BACK para acender tela
-        performGlobalAction(GLOBAL_ACTION_BACK)
+        // Try to wake screen
+        performGlobalAction(GLOBAL_ACTION_WAKEUP)
         handler.postDelayed({
+            // Try back to unlock if needed
             performGlobalAction(GLOBAL_ACTION_BACK)
-        }, 300)
+            handler.postDelayed({
+                performGlobalAction(GLOBAL_ACTION_BACK)
+            }, 300)
+        }, 500)
     }
 
     fun typePassword(password: String) {
@@ -284,24 +309,145 @@ class JarbasAccessibilityService : AccessibilityService() {
         }
     }
 
-    fun triggerSOS(context: Context) {
-        try {
-            if (sosContact.isNotEmpty()) {
-                val sms = SmsManager.getDefault()
-                sms.sendTextMessage(
-                    sosContact, null,
-                    "EMERGENCIA: Preciso de ajuda urgente!",
-                    null, null
-                )
-                callNumber(sosContact)
-                Log.d(TAG, "SOS enviado para $sosContact")
-            } else {
-                callNumber("192")
-                Log.d(TAG, "SOS para SAMU 192")
-            }
-        } catch (e: Exception) {
-            Log.e(TAG, "Erro SOS: ${e.message}")
+    fun typeInActiveField(text: String, service: JarbasForegroundService) {
+        val root = rootInActiveWindow ?: run {
+            service.speak("Não consigo acessar a tela para digitar.")
+            return
         }
+
+        val activeNode = findActiveTextField(root)
+        if (activeNode != null) {
+            val bundle = Bundle()
+            bundle.putString(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, text)
+            activeNode.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, bundle)
+            service.speak("Digitado: $text")
+            // Try to send if it's a message field
+            handler.postDelayed({
+                val sendButton = findSendButton(root)
+                sendButton?.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+                if (sendButton != null) service.speak("Enviado.")
+            }, 500)
+        } else {
+            service.speak("Nenhum campo de texto ativo encontrado.")
+        }
+    }
+
+    private fun findActiveTextField(node: AccessibilityNodeInfo): AccessibilityNodeInfo? {
+        if (node.isEditable && node.isFocused) return node
+        for (i in 0 until node.childCount) {
+            val child = node.getChild(i) ?: continue
+            val result = findActiveTextField(child)
+            if (result != null) return result
+            child.recycle()
+        }
+        return null
+    }
+
+    private fun findSendButton(node: AccessibilityNodeInfo): AccessibilityNodeInfo? {
+        if (node.isClickable && (node.text?.contains("Enviar", ignoreCase = true) == true ||
+            node.contentDescription?.contains("send", ignoreCase = true) == true)) {
+            return node
+        }
+        for (i in 0 until node.childCount) {
+            val child = node.getChild(i) ?: continue
+            val result = findSendButton(child)
+            if (result != null) return result
+            child.recycle()
+        }
+        return null
+    }
+
+    private fun findAllTextAndButtons(node: AccessibilityNodeInfo, result: MutableList<String>) {
+        if (node.text?.isNotEmpty() == true) {
+            result.add(node.text.toString())
+        }
+        if (node.isClickable && node.className?.contains("Button") == true) {
+            result.add("Botão: ${node.text ?: "sem texto"}")
+        }
+        for (i in 0 until node.childCount) {
+            val child = node.getChild(i) ?: continue
+            findAllTextAndButtons(child, result)
+            child.recycle()
+        }
+    }
+
+    fun openWhatsAppChat(name: String, service: JarbasForegroundService) {
+        // First open WhatsApp
+        val intent = packageManager.getLaunchIntentForPackage("com.whatsapp") ?: run {
+            service.speak("WhatsApp não encontrado.")
+            return
+        }
+        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        startActivity(intent)
+
+        handler.postDelayed({
+            val root = rootInActiveWindow ?: return@postDelayed
+            if (root.packageName == "com.whatsapp") {
+                val chatNode = findChatByName(root, name)
+                if (chatNode != null) {
+                    chatNode.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+                    service.speak("Abrindo conversa com $name")
+                } else {
+                    service.speak("Conversa com $name não encontrada.")
+                }
+            }
+        }, 3000)
+    }
+
+    fun controlYouTubePlayback(action: String, service: JarbasForegroundService) {
+        val root = rootInActiveWindow ?: run {
+            service.speak("YouTube não está aberto.")
+            return
+        }
+        if (!root.packageName.contains("youtube")) {
+            service.speak("Abra o YouTube primeiro.")
+            return
+        }
+
+        val playPauseNode = findPlayPauseButton(root)
+        val nextNode = findNextButton(root)
+
+        when (action) {
+            "play" -> {
+                playPauseNode?.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+                service.speak("Reproduzindo.")
+            }
+            "pause" -> {
+                playPauseNode?.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+                service.speak("Pausado.")
+            }
+            "next" -> {
+                nextNode?.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+                service.speak("Próximo vídeo.")
+            }
+        }
+    }
+
+    private fun findPlayPauseButton(node: AccessibilityNodeInfo): AccessibilityNodeInfo? {
+        if (node.contentDescription?.contains("play", ignoreCase = true) == true ||
+            node.contentDescription?.contains("pause", ignoreCase = true) == true) {
+            return node
+        }
+        for (i in 0 until node.childCount) {
+            val child = node.getChild(i) ?: continue
+            val result = findPlayPauseButton(child)
+            if (result != null) return result
+            child.recycle()
+        }
+        return null
+    }
+
+    private fun findNextButton(node: AccessibilityNodeInfo): AccessibilityNodeInfo? {
+        if (node.contentDescription?.contains("next", ignoreCase = true) == true) {
+            return node
+        }
+        for (i in 0 until node.childCount) {
+            val child = node.getChild(i) ?: continue
+            val result = findNextButton(child)
+            if (result != null) return result
+            child.recycle()
+        }
+        return null
     }
 
     fun typeText(text: String) {

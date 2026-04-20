@@ -323,10 +323,16 @@ class JarbasForegroundService : Service(), TextToSpeech.OnInitListener {
                 if (name.isNotBlank()) resolveAndCall(name)
                 else { speak("Quem devo ligar?"); handler.postDelayed({ listenCycle() }, 2000) }
             }
-            command.containsAny(listOf("abre", "abrir", "roda", "executa")) -> {
-                val app = extractAfter(command, listOf("abre o", "abre a", "abre", "abrir o", "abrir a", "abrir", "abra o", "abra a", "abra"))
-                if (app.isNotBlank()) resolveAndOpenApp(app)
-                else { speak("Qual app?"); handler.postDelayed({ listenCycle() }, 2000) }
+            command.containsAny(listOf("abre whatsapp", "abre whats", "abre zap")) -> {
+                val chat = extractAfter(command, listOf("abre whatsapp com", "abre whats com", "abre zap com", "abre whatsapp pra", "abre whats pra", "abre zap pra"))
+                if (chat.isNotBlank()) {
+                    speak("Abrindo WhatsApp com $chat")
+                    JarbasAccessibilityService.instance?.openWhatsAppChat(chat, this)
+                } else {
+                    speak("Abrindo WhatsApp")
+                    JarbasAccessibilityService.instance?.openApp("whatsapp")
+                }
+                handler.postDelayed({ listenCycle() }, 2000)
             }
             command.containsAny(listOf("musica", "música", "toca", "tocar", "play")) -> {
                 val song = extractAfter(command, listOf("toca musica de", "toca musica do", "toca a musica", "toca musica", "tocar musica", "play", "toca"))
@@ -334,6 +340,16 @@ class JarbasForegroundService : Service(), TextToSpeech.OnInitListener {
                 speak("Tocando $query no YouTube")
                 JarbasAccessibilityService.instance?.openYoutubeAndPlay(query)
                 handler.postDelayed({ listenCycle() }, 2000)
+            }
+            command.containsAny(listOf("pausa", "pause", "para")) -> {
+                speak("Pausando música.")
+                JarbasAccessibilityService.instance?.controlYouTubePlayback("pause", this)
+                handler.postDelayed({ listenCycle() }, 1500)
+            }
+            command.containsAny(listOf("proximo", "próximo", "next", "pula")) -> {
+                speak("Próximo vídeo.")
+                JarbasAccessibilityService.instance?.controlYouTubePlayback("next", this)
+                handler.postDelayed({ listenCycle() }, 1500)
             }
             command.containsAny(listOf("volta", "voltar", "sai", "fecha", "back")) -> {
                 speak("Voltando.")
@@ -343,6 +359,21 @@ class JarbasForegroundService : Service(), TextToSpeech.OnInitListener {
             command.containsAny(listOf("home", "inicio", "tela inicial")) -> {
                 JarbasAccessibilityService.instance?.pressHome()
                 handler.postDelayed({ listenCycle() }, 1500)
+            }
+            command.containsAny(listOf("le tela", "ler tela", "leia tela", "o que tem na tela")) -> {
+                speak("Lendo a tela...")
+                JarbasAccessibilityService.instance?.readScreen(this)
+                handler.postDelayed({ listenCycle() }, 2000)
+            }
+            command.containsAny(listOf("digita", "digite", "escreva", "escreve")) -> {
+                val text = extractAfter(command, listOf("digita", "digite", "escreva", "escreve"))
+                if (text.isNotBlank()) {
+                    speak("Digitando $text")
+                    JarbasAccessibilityService.instance?.typeInActiveField(text, this)
+                } else {
+                    speak("O que devo digitar?")
+                }
+                handler.postDelayed({ listenCycle() }, 2000)
             }
             else -> {
                 speak("Nao entendi. Tente: Jarbas abre WhatsApp, liga pra pai, pesquisa IA.")
