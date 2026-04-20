@@ -458,6 +458,122 @@ class JarbasAccessibilityService : AccessibilityService() {
         focused?.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, bundle)
     }
 
+    fun openChromeWithUrl(url: String, service: JarbasForegroundService) {
+        val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url))
+        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        intent.setPackage("com.android.chrome") // Force Chrome
+        try {
+            startActivity(intent)
+            service.speak("Abrindo Kore Organiza no Chrome")
+        } catch (e: Exception) {
+            // Fallback to default browser
+            intent.setPackage(null)
+            startActivity(intent)
+            service.speak("Abrindo no navegador padrão")
+        }
+    }
+
+    fun performLogin(username: String, password: String, service: JarbasForegroundService) {
+        val root = rootInActiveWindow ?: run {
+            service.speak("Nenhuma tela ativa.")
+            return
+        }
+
+        // Find username field (look for input with placeholder or label containing "user", "email", "login")
+        val usernameField = findInputField(root, listOf("user", "email", "login", "usuário"))
+        if (usernameField != null) {
+            val bundle = Bundle()
+            bundle.putString(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, username)
+            usernameField.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, bundle)
+            service.speak("Usuário digitado")
+        } else {
+            service.speak("Campo de usuário não encontrado")
+        }
+
+        // Find password field
+        val passwordField = findInputField(root, listOf("password", "senha", "pass"))
+        if (passwordField != null) {
+            val bundle = Bundle()
+            bundle.putString(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, password)
+            passwordField.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, bundle)
+            service.speak("Senha digitada")
+        } else {
+            service.speak("Campo de senha não encontrado")
+        }
+
+        // Find login button
+        handler.postDelayed({
+            val loginButton = findButton(root, listOf("login", "entrar", "log in", "sign in"))
+            if (loginButton != null) {
+                loginButton.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+                service.speak("Entrando")
+            } else {
+                service.speak("Botão de login não encontrado")
+            }
+        }, 1000)
+    }
+
+    private fun findInputField(node: AccessibilityNodeInfo, keywords: List<String>): AccessibilityNodeInfo? {
+        if (node.className?.contains("EditText") == true || node.className?.contains("input") == true) {
+            val hint = node.hintText?.toString()?.lowercase() ?: ""
+            val label = node.text?.toString()?.lowercase() ?: ""
+            if (keywords.any { hint.contains(it) || label.contains(it) }) {
+                return node
+            }
+        }
+        for (i in 0 until node.childCount) {
+            val child = node.getChild(i) ?: continue
+            val result = findInputField(child, keywords)
+            if (result != null) return result
+            child.recycle()
+        }
+        return null
+    }
+
+    private fun findButton(node: AccessibilityNodeInfo, keywords: List<String>): AccessibilityNodeInfo? {
+        if (node.isClickable && (node.className?.contains("Button") == true || node.className?.contains("button") == true)) {
+            val text = node.text?.toString()?.lowercase() ?: ""
+            if (keywords.any { text.contains(it) }) {
+                return node
+            }
+        }
+        for (i in 0 until node.childCount) {
+            val child = node.getChild(i) ?: continue
+            val result = findButton(child, keywords)
+            if (result != null) return result
+            child.recycle()
+        }
+        return null
+    }
+
+    fun clickOnText(text: String, service: JarbasForegroundService) {
+        val root = rootInActiveWindow ?: run {
+            service.speak("Nenhuma tela ativa.")
+            return
+        }
+
+        val element = findElementByText(root, text)
+        if (element != null && element.isClickable) {
+            element.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+            service.speak("Clicado em $text")
+        } else {
+            service.speak("Elemento $text não encontrado ou não clicável")
+        }
+    }
+
+    private fun findElementByText(node: AccessibilityNodeInfo, text: String): AccessibilityNodeInfo? {
+        if (node.text?.toString()?.contains(text, ignoreCase = true) == true) {
+            return node
+        }
+        for (i in 0 until node.childCount) {
+            val child = node.getChild(i) ?: continue
+            val result = findElementByText(child, text)
+            if (result != null) return result
+            child.recycle()
+        }
+        return null
+    }
+
     override fun onInterrupt() {
         Log.d(TAG, "onInterrupt chamado")
     }

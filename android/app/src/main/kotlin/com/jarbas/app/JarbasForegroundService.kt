@@ -323,14 +323,22 @@ class JarbasForegroundService : Service(), TextToSpeech.OnInitListener {
                 if (name.isNotBlank()) resolveAndCall(name)
                 else { speak("Quem devo ligar?"); handler.postDelayed({ listenCycle() }, 2000) }
             }
-            command.containsAny(listOf("abre whatsapp", "abre whats", "abre zap")) -> {
-                val chat = extractAfter(command, listOf("abre whatsapp com", "abre whats com", "abre zap com", "abre whatsapp pra", "abre whats pra", "abre zap pra"))
-                if (chat.isNotBlank()) {
-                    speak("Abrindo WhatsApp com $chat")
-                    JarbasAccessibilityService.instance?.openWhatsAppChat(chat, this)
+            command.containsAny(listOf("entrar no kore organiza", "abre kore organiza", "kore organiza")) -> {
+                speak("Entrando no Kore Organiza")
+                JarbasAccessibilityService.instance?.openChromeWithUrl("https://contbilidade-inteligente-frcy.onrender.com", this)
+                handler.postDelayed({ listenCycle() }, 3000)
+            }
+            command.containsAny(listOf("login", "logar")) -> {
+                val parts = command.split(" ")
+                val usernameIndex = parts.indexOfFirst { it.contains("login", ignoreCase = true) }
+                val senhaIndex = parts.indexOfFirst { it.contains("senha", ignoreCase = true) }
+                if (usernameIndex != -1 && senhaIndex != -1 && senhaIndex > usernameIndex) {
+                    val username = parts[usernameIndex + 1]
+                    val password = parts[senhaIndex + 1]
+                    speak("Fazendo login com usuário $username")
+                    JarbasAccessibilityService.instance?.performLogin(username, password, this)
                 } else {
-                    speak("Abrindo WhatsApp")
-                    JarbasAccessibilityService.instance?.openApp("whatsapp")
+                    speak("Diga: login [usuário] senha [senha]")
                 }
                 handler.postDelayed({ listenCycle() }, 2000)
             }
@@ -365,15 +373,15 @@ class JarbasForegroundService : Service(), TextToSpeech.OnInitListener {
                 JarbasAccessibilityService.instance?.readScreen(this)
                 handler.postDelayed({ listenCycle() }, 2000)
             }
-            command.containsAny(listOf("digita", "digite", "escreva", "escreve")) -> {
-                val text = extractAfter(command, listOf("digita", "digite", "escreva", "escreve"))
+            command.containsAny(listOf("clica em", "clique em", "aperte em")) -> {
+                val text = extractAfter(command, listOf("clica em", "clique em", "aperte em"))
                 if (text.isNotBlank()) {
-                    speak("Digitando $text")
-                    JarbasAccessibilityService.instance?.typeInActiveField(text, this)
+                    speak("Clicando em $text")
+                    JarbasAccessibilityService.instance?.clickOnText(text, this)
                 } else {
-                    speak("O que devo digitar?")
+                    speak("Diga o que clicar")
                 }
-                handler.postDelayed({ listenCycle() }, 2000)
+                handler.postDelayed({ listenCycle() }, 1500)
             }
             else -> {
                 speak("Nao entendi. Tente: Jarbas abre WhatsApp, liga pra pai, pesquisa IA.")
