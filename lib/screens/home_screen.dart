@@ -14,7 +14,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
   bool _jarbasAtivo = false;
   bool _accessibilityOk = false;
+  bool _batteryOk = false;
   String _status = 'Jarbas inativo';
+  String _sosContact = '';
 
   @override
   void initState() {
@@ -39,8 +41,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
   Future<void> _checkPermissions() async {
     final accessOk = await _channel.invokeMethod<bool>('isAccessibilityEnabled') ?? false;
+    final batteryOk = await _channel.invokeMethod<bool>('isBatteryOptimizationDisabled') ?? false;
     setState(() {
       _accessibilityOk = accessOk;
+      _batteryOk = batteryOk;
     });
   }
 
@@ -50,6 +54,12 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     await Permission.contacts.request();
 
     final accessOk = await _channel.invokeMethod<bool>('isAccessibilityEnabled') ?? false;
+    final batteryOk = await _channel.invokeMethod<bool>('isBatteryOptimizationDisabled') ?? false;
+
+    if (!batteryOk) {
+      _showBatteryDialog();
+      return;
+    }
 
     if (!accessOk) {
       _showAccessibilityDialog();
@@ -57,9 +67,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     }
 
     await _channel.invokeMethod('startJarbas');
+    await _channel.invokeMethod('setSOSContact', {'contact': _sosContact});
     setState(() {
       _jarbasAtivo = true;
       _accessibilityOk = true;
+      _batteryOk = true;
       _status = 'Jarbas ouvindo... Diga "Jarbas" para comecar';
     });
   }
@@ -96,6 +108,37 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           TextButton(
             onPressed: () => Navigator.pop(context),
             child: const Text('Ja ativei',
+                style: TextStyle(color: Colors.white54)),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showBatteryDialog() {
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => AlertDialog(
+        backgroundColor: const Color(0xFF1A1A2E),
+        title: const Text('Otimização de Bateria',
+            style: TextStyle(color: Colors.white)),
+        content: const Text(
+          'Desative a otimização de bateria para Jarbas em:\nConfigurações > Apps > Jarbas > Bateria > Não otimizar\n\nIsso evita que o serviço pare.',
+          style: TextStyle(color: Colors.white70, height: 1.6),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () {
+              Navigator.pop(context);
+              _channel.invokeMethod('openBatterySettings');
+            },
+            child: const Text('Abrir Configurações',
+                style: TextStyle(color: Color(0xFF00D4FF))),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Já desativei',
                 style: TextStyle(color: Colors.white54)),
           ),
         ],
@@ -163,6 +206,25 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                 ),
               ),
               const SizedBox(height: 40),
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 40),
+                child: TextField(
+                  onChanged: (value) => _sosContact = value,
+                  decoration: const InputDecoration(
+                    labelText: 'Contato SOS (número)',
+                    labelStyle: TextStyle(color: Colors.white54),
+                    enabledBorder: OutlineInputBorder(
+                      borderSide: BorderSide(color: Colors.white24),
+                    ),
+                    focusedBorder: OutlineInputBorder(
+                      borderSide: BorderSide(color: Color(0xFF00D4FF)),
+                    ),
+                  ),
+                  style: const TextStyle(color: Colors.white),
+                  keyboardType: TextInputType.phone,
+                ),
+              ),
+              const SizedBox(height: 20),
               Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 40),
                 child: Text(

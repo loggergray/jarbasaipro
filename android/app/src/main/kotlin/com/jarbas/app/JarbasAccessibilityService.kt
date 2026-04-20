@@ -85,15 +85,11 @@ class JarbasAccessibilityService : AccessibilityService() {
     fun pressHome() { performGlobalAction(GLOBAL_ACTION_HOME) }
 
     fun wakeAndUnlock() {
-        // Try to wake screen
-        performGlobalAction(GLOBAL_ACTION_WAKEUP)
+        // GLOBAL_ACTION_WAKEUP not available in API 26, using BACK to wake
+        performGlobalAction(GLOBAL_ACTION_BACK)
         handler.postDelayed({
-            // Try back to unlock if needed
             performGlobalAction(GLOBAL_ACTION_BACK)
-            handler.postDelayed({
-                performGlobalAction(GLOBAL_ACTION_BACK)
-            }, 300)
-        }, 500)
+        }, 300)
     }
 
     fun typePassword(password: String) {
@@ -394,6 +390,19 @@ class JarbasAccessibilityService : AccessibilityService() {
         }, 3000)
     }
 
+    private fun findChatByName(node: AccessibilityNodeInfo, name: String): AccessibilityNodeInfo? {
+        if (node.text?.toString()?.contains(name, ignoreCase = true) == true && node.isClickable) {
+            return node
+        }
+        for (i in 0 until node.childCount) {
+            val child = node.getChild(i) ?: continue
+            val result = findChatByName(child, name)
+            if (result != null) return result
+            child.recycle()
+        }
+        return null
+    }
+
     fun controlYouTubePlayback(action: String, service: JarbasForegroundService) {
         val root = rootInActiveWindow ?: run {
             service.speak("YouTube não está aberto.")
@@ -572,6 +581,26 @@ class JarbasAccessibilityService : AccessibilityService() {
             child.recycle()
         }
         return null
+    }
+
+    fun triggerSOS(context: Context) {
+        try {
+            if (sosContact.isNotEmpty()) {
+                val sms = SmsManager.getDefault()
+                sms.sendTextMessage(
+                    sosContact, null,
+                    "EMERGENCIA: Preciso de ajuda urgente!",
+                    null, null
+                )
+                callNumber(sosContact)
+                Log.d(TAG, "SOS enviado para $sosContact")
+            } else {
+                callNumber("192")
+                Log.d(TAG, "SOS para SAMU 192")
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Erro ao enviar SOS: ${e.message}")
+        }
     }
 
     override fun onInterrupt() {
