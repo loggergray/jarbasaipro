@@ -93,7 +93,7 @@ class JarbasAccessibilityService : AccessibilityService() {
     }
 
     fun typePassword(password: String) {
-        Log.d(TAG, "Digitando senha: $password")
+        Log.d(TAG, "Digitando senha: ${"*".repeat(password.length)}")
         val root = rootInActiveWindow ?: run {
             Log.d(TAG, "rootInActiveWindow null")
             return
@@ -600,6 +600,22 @@ class JarbasAccessibilityService : AccessibilityService() {
             }
         } catch (e: Exception) {
             Log.e(TAG, "Erro ao enviar SOS: ${e.message}")
+        }
+    }
+
+    fun readScreen(service: JarbasForegroundService) {
+        val root = rootInActiveWindow ?: run {
+            service.speak("Não consigo acessar a tela.")
+            return
+        }
+
+        val texts = mutableListOf<String>()
+        findAllTextAndButtons(root, texts)
+        if (texts.isNotEmpty()) {
+            val content = texts.take(10).joinToString(". ") // Limit to first 10 elements
+            service.speak("Conteúdo da tela: $content")
+        } else {
+            service.speak("Nenhum texto encontrado na tela.")
         }
     }
 
