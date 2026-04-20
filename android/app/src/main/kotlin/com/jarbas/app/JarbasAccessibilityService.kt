@@ -47,7 +47,7 @@ class JarbasAccessibilityService : AccessibilityService() {
     private fun checkAndSkipAd() {
         val root = rootInActiveWindow ?: return
         val skipTexts = listOf(
-            "Pular anuncio", "Pular anúncio", "Skip Ad", "PULAR", "SKIP",
+            "Pular anúncio", "Pular anuncio", "Skip Ad", "PULAR", "SKIP",
             "Pular", "Skip", "Pular propaganda", "Skip ads"
         )
         for (text in skipTexts) {
@@ -64,8 +64,11 @@ class JarbasAccessibilityService : AccessibilityService() {
     fun pressHome() { performGlobalAction(GLOBAL_ACTION_HOME) }
 
     fun wakeAndUnlock() {
+        // GLOBAL_ACTION_WAKEUP nao existe no API 26, usando BACK para acender tela
         performGlobalAction(GLOBAL_ACTION_BACK)
-        handler.postDelayed({ performGlobalAction(GLOBAL_ACTION_BACK) }, 300)
+        handler.postDelayed({
+            performGlobalAction(GLOBAL_ACTION_BACK)
+        }, 300)
     }
 
     fun typePassword(password: String) {
@@ -89,17 +92,24 @@ class JarbasAccessibilityService : AccessibilityService() {
             val fields = root.findAccessibilityNodeInfosByViewId(id)
             if (!fields.isNullOrEmpty()) {
                 val bundle = Bundle()
-                bundle.putString(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, password)
+                bundle.putString(
+                    AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE,
+                    password
+                )
                 fields[0].performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, bundle)
                 Log.d(TAG, "Senha digitada via campo $id")
+
                 handler.postDelayed({
                     val r = rootInActiveWindow ?: return@postDelayed
-                    val confirmTexts = listOf("OK", "Enter", "Confirmar", "Done", "Desbloquear", "Unlock", "Continuar", "Next")
-                    for (t in confirmTexts) {
-                        val nodes = r.findAccessibilityNodeInfosByText(t)
-                        if (!nodes.isNullOrEmpty()) {
-                            nodes[0].performAction(AccessibilityNodeInfo.ACTION_CLICK)
-                            Log.d(TAG, "Confirmou senha com: $t")
+                    val confirmTexts = listOf(
+                        "OK", "Enter", "Confirmar", "Done", "Concluido",
+                        "Desbloquear", "Unlock", "Continuar", "Next"
+                    )
+                    for (text in confirmTexts) {
+                        val confirmNodes = r.findAccessibilityNodeInfosByText(text)
+                        if (!confirmNodes.isNullOrEmpty()) {
+                            confirmNodes[0].performAction(AccessibilityNodeInfo.ACTION_CLICK)
+                            Log.d(TAG, "Confirmou senha com: $text")
                             return@postDelayed
                         }
                     }
@@ -110,20 +120,22 @@ class JarbasAccessibilityService : AccessibilityService() {
             }
         }
 
+        // FALLBACK ROBUSTO: digito por digito
         Log.d(TAG, "Fallback: clicando digito a digito")
         var delay = 0L
         for (digit in password) {
             handler.postDelayed({
                 val r = rootInActiveWindow ?: return@postDelayed
-                r.findAccessibilityNodeInfosByText(digit.toString())
-                    ?.firstOrNull()?.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+                val nodes = r.findAccessibilityNodeInfosByText(digit.toString())
+                nodes?.firstOrNull()?.performAction(AccessibilityNodeInfo.ACTION_CLICK)
             }, delay)
             delay += 300
         }
         handler.postDelayed({
             val r = rootInActiveWindow ?: return@postDelayed
-            listOf("OK", "Enter", "Confirmar", "Done").forEach { t ->
-                val nodes = r.findAccessibilityNodeInfosByText(t)
+            val confirmTexts = listOf("OK", "Enter", "Confirmar", "Done")
+            for (text in confirmTexts) {
+                val nodes = r.findAccessibilityNodeInfosByText(text)
                 if (!nodes.isNullOrEmpty()) {
                     nodes[0].performAction(AccessibilityNodeInfo.ACTION_CLICK)
                     return@postDelayed
@@ -177,6 +189,7 @@ class JarbasAccessibilityService : AccessibilityService() {
             Uri.parse("https://www.youtube.com/results?search_query=$encodedQuery"))
         intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         startActivity(intent)
+
         scope.launch {
             delay(5000)
             withContext(Dispatchers.Main) { clickFirstVideoResult() }
@@ -198,9 +211,10 @@ class JarbasAccessibilityService : AccessibilityService() {
                 return
             }
         }
-        findAllClickableNodes(root)
-            .filter { (it.text?.length ?: 0) > 10 }
-            .firstOrNull()?.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+        // FALLBACK: primeiro clicavel com texto longo
+        val allText = findAllClickableNodes(root)
+            .filter { it.text?.length ?: 0 > 10 }
+        allText.firstOrNull()?.performAction(AccessibilityNodeInfo.ACTION_CLICK)
     }
 
     private fun findAllClickableNodes(node: AccessibilityNodeInfo): List<AccessibilityNodeInfo> {
@@ -209,6 +223,7 @@ class JarbasAccessibilityService : AccessibilityService() {
         for (i in 0 until node.childCount) {
             val child = node.getChild(i) ?: continue
             result.addAll(findAllClickableNodes(child))
+            child.recycle()
         }
         return result
     }
@@ -244,7 +259,7 @@ class JarbasAccessibilityService : AccessibilityService() {
                         service.speak("Nao encontrei resultados para $query")
                     } else {
                         searchResults = results.take(4)
-                        val titles = searchResults.mapIndexed { i, r -> "${i+1}: ${r.first.take(30)}" }.joinToString(". ")
+                        val titles = searchResults.mapIndexed { i, r -> "${i + 1}: ${r.first.take(30)}..." }.joinToString(". ")
                         service.speak("Achei ${searchResults.size} resultados. $titles. Qual quer ouvir?")
                         service.awaitingSearchChoice = true
                     }
@@ -261,7 +276,7 @@ class JarbasAccessibilityService : AccessibilityService() {
     fun readSearchResult(index: Int, service: JarbasForegroundService) {
         if (index < searchResults.size) {
             val r = searchResults[index]
-            val content = if (r.second.length > 200) r.second.take(200) + "..." else r.second
+            val content = r.second.take(200) + if (r.second.length > 200) "..." else ""
             service.speak("${r.first}. $content. Deseja ouvir o proximo?")
             service.awaitingNextResult = true
         } else {
@@ -272,8 +287,11 @@ class JarbasAccessibilityService : AccessibilityService() {
     fun triggerSOS(context: Context) {
         try {
             if (sosContact.isNotEmpty()) {
-                SmsManager.getDefault().sendTextMessage(
-                    sosContact, null, "EMERGENCIA: Preciso de ajuda urgente!", null, null
+                val sms = SmsManager.getDefault()
+                sms.sendTextMessage(
+                    sosContact, null,
+                    "EMERGENCIA: Preciso de ajuda urgente!",
+                    null, null
                 )
                 callNumber(sosContact)
                 Log.d(TAG, "SOS enviado para $sosContact")
